@@ -1,0 +1,158 @@
+<!-- Output: html --><!-- Filename: scanner --><!-- File: scanner.html -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>QRコード読み取り</title>
+
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      margin: 20px;
+    }
+
+    #reader {
+      width: min(100%, 420px);
+      margin: 20px auto;
+    }
+
+    button {
+      padding: 12px 20px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>QRコード読み取り</h2>
+  <button id="start" type="button">カメラを開始</button>
+  <div id="reader"></div>
+  <p id="status" role="status">開始ボタンを押してください。</p>
+
+  <script>
+    const params = new URLSearchParams(location.hash.slice(1));
+    const parentOrigin = params.get("origin");
+    const session = params.get("session");
+    const parentWindow = window.opener;
+
+    const startButton = document.getElementById("start");
+    const statusElement = document.getElementById("status");
+
+    let scanner = null;
+    let resultSent = false;
+    let acknowledgementTimer = null;
+
+    async function sendQrResult(text) {
+      if (resultSent) {
+        return;
+      }
+
+      resultSent = true;
+      statusElement.textContent = "読み取り完了。受付画面へ送信しています...";
+
+      try {
+        await scanner.stop();
+
+        if (!parentWindow || parentWindow.closed) {
+          throw new Error("受付画面との接続がありません。");
+        }
+
+        acknowledgementTimer = setTimeout(() => {
+          statusElement.textContent =
+            "受付画面から応答がありません。再読み取りの前に受付画面を確認してください。";
+        }, 10000);
+
+        parentWindow.postMessage(
+          {
+            type: "qr-result",
+            session: session,
+            text: text
+          },
+          parentOrigin
+        );
+      } catch (error) {
+        clearTimeout(acknowledgementTimer);
+        statusElement.textContent = "送信失敗: " + String(error);
+      }
+    }
+
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+
+      if (
+        event.source !== parentWindow ||
+        event.origin !== parentOrigin ||
+        !data ||
+        data.type !== "qr-accepted" ||
+        data.session !== session
+      ) {
+        return;
+      }
+
+      clearTimeout(acknowledgementTimer);
+
+      statusElement.textContent =
+        "受付画面に送信しました。この画面が閉じない場合は受付画面へ戻ってください。";
+
+      window.close();
+    });
+
+    startButton.addEventListener("click", async () => {
+      startButton.disabled = true;
+
+      try {
+        if (!parentWindow || !parentOrigin || !session) {
+          throw new Error(
+            "受付画面との接続がありません。GASのボタンから開いてください。"
+          );
+        }
+
+        const caller = new URL(parentOrigin);
+
+        if (
+          caller.protocol !== "https:" ||
+          caller.origin !== parentOrigin
+        ) {
+          throw new Error("受付画面の接続情報が不正です。");
+        }
+
+        if (typeof Html5Qrcode === "undefined") {
+          throw new Error("QR読み取りライブラリを読み込めませんでした。");
+        }
+
+        if (!scanner) {
+          scanner = new Html5Qrcode("reader");
+        }
+
+        statusElement.textContent = "カメラの使用を許可してください。";
+
+        await scanner.start(
+          {
+            facingMode: "environment"
+          },
+          {
+            fps: 10
+          },
+          sendQrResult,
+          () => {
+            // QRコードが映っていない間の通知は表示しません。
+          }
+        );
+
+        if (!resultSent) {
+          statusElement.textContent = "QRコードをかざしてください。";
+        }
+      } catch (error) {
+        startButton.disabled = false;
+        statusElement.textContent =
+          "カメラ起動失敗: " + String(error);
+      }
+    });
+  </script>
+</body>
+</html>
